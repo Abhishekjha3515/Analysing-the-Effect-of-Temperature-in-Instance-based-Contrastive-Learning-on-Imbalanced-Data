@@ -11,8 +11,8 @@ from tqdm import tqdm
 
 import utils
 from dataset_cifarLT import CIFAR10LT, CIFAR100LT
-from scheduler import LinearWarmupCosineAnnealingLR
-from model import Model, Model2
+# from scheduler import LinearWarmupCosineAnnealingLR
+from model import Model
 from torch.optim.lr_scheduler import MultiStepLR, CosineAnnealingLR
 
 import datetime
@@ -20,41 +20,61 @@ import datetime
 np.random.seed(1234)
 torch.manual_seed(1234)
 
-#### Proposed Dual Temp Scheduling ####
-def get_temp_positive(tmin, tmax, cossim):
 
-    ###### UNCOMMENT FOR STABILIZATION ###########
-    # tmin = tmin + global_step*(tmax-tmin)/epochs
-    ##############################################
+# def get_temp_positive(tmin, tmax, cossim):
 
-    if func == 'cossin':
-        temp = tmin + 0.5*(tmax - tmin) *(1 + torch.cos((1 + cossim)*torch.tensor(np.pi)))  # sine-cosine scheduling  
-    elif func=='cosconst':
-        a, b, c = (float(x) for x in exp_params.split('|'))
-        temp = torch.ones_like(cossim)
-        temp[cossim > -0.2] = tmax #a - b * torch.exp(-c*cossim[cossim>0.0])
-        temp[cossim <= -0.2] = tmin + 0.5*(tmax-tmin)*(1+torch.cos((0.2+cossim[cossim<=-0.2])*torch.tensor(np.pi)/0.8))
-    else:
-        temp = tmax
-    return temp   
+#     ###### UNCOMMENT FOR STABILIZATION ###########
+#     # tmin = tmin + global_step*(tmax-tmin)/epochs
+#     ##############################################
+
+#     if func == 'cossin':
+#         temp = tmin + 0.5*(tmax - tmin) *(1 + torch.cos((1 + cossim)*torch.tensor(np.pi)))  # sine-cosine scheduling  
+#     elif func=='cosconst':
+#         a, b, c = (float(x) for x in exp_params.split('|'))
+#         temp = torch.ones_like(cossim)
+#         temp[cossim > -0.2] = tmax #a - b * torch.exp(-c*cossim[cossim>0.0])
+#         temp[cossim <= -0.2] = tmin + 0.5*(tmax-tmin)*(1+torch.cos((0.2+cossim[cossim<=-0.2])*torch.tensor(np.pi)/0.8))
+#     else:
+#         temp = tmax
+#     return temp 
+  
 
 
-def get_temp_negative(tmin, tmax, cossim):
+# def get_temp_negative(tmin, tmax, cossim):
     
-    ###### UNCOMMENT FOR STABILIZATION ###########
-    # tmin = tmin + global_step*(tmax-tmin)/epochs
-    ##############################################
+#     ###### UNCOMMENT FOR STABILIZATION ###########
+#     # tmin = tmin + global_step*(tmax-tmin)/epochs
+#     ##############################################
     
-    if func == 'cossin':
-        temp = tmin + 0.5*(tmax - tmin) *(1 + torch.cos((1 + cossim)*torch.tensor(np.pi)))  # sine-cosine scheduling
-    elif func=='cosconst':
-        a, b, c = (float(x) for x in exp_params.split('|'))
-        temp = torch.ones_like(cossim)
-        temp[cossim > -0.2] = tmax #a - b * torch.exp(-c*cossim[cossim>0.0])
-        temp[cossim <= -0.2] = tmin + 0.5*(tmax-tmin)*(1+torch.cos((0.2+cossim[cossim<=-0.2])*torch.tensor(np.pi)/0.8))
-    else:
-        temp = tmax
-    return temp
+#     if func == 'cossin':
+#         temp = tmin + 0.5*(tmax - tmin) *(1 + torch.cos((1 + cossim)*torch.tensor(np.pi)))  # sine-cosine scheduling
+#     elif func=='cosconst':
+#         a, b, c = (float(x) for x in exp_params.split('|'))
+#         temp = torch.ones_like(cossim)
+#         temp[cossim > -0.2] = tmax #a - b * torch.exp(-c*cossim[cossim>0.0])
+#         temp[cossim <= -0.2] = tmin + 0.5*(tmax-tmin)*(1+torch.cos((0.2+cossim[cossim<=-0.2])*torch.tensor(np.pi)/0.8))
+#     else:
+#         temp = tmax
+#     return temp
+
+#MACL model for Imbalanced dataset 
+def MACL(pos, neg, t_0, a, A_0):
+        # model-aware temperature
+        pos=pos
+        neg = neg
+        a= a
+        t_0=t_0
+        A_0= A_0
+        A = torch.mean(pos.detach())
+        t = t_0 * (1 + a * (A - A_0))
+        logits = torch.cat([pos, neg], dim=1)     
+
+        P = torch.softmax(logits/t, dim=1)[:, 0]
+        # reweighting the loss
+        V = 1 / (1 - P)
+        loss = -V.detach() * torch.log(P)
+        return loss.mean()
+
 
 def get_mask_negative(batch_size):
         N = 2 * batch_size
@@ -66,7 +86,7 @@ def get_mask_negative(batch_size):
         return mask
 
 # train for one epoch to learn unique features
-def train(net, data_loader, train_optimizer, bsz, tmin, tmax):
+def train(net, data_loader, train_optimizer, bsz, t_0):
     net.train()
     total_loss, total_num, train_bar = 0.0, 0, tqdm(data_loader)
     for pos_1, pos_2, target in train_bar:
@@ -88,15 +108,16 @@ def train(net, data_loader, train_optimizer, bsz, tmin, tmax):
         positive_samples = torch.cat((sim_i_j, sim_j_i), dim=0).reshape(N, 1)
         negative_samples = sim[precomp_mask].reshape(N, -1)
 
-        '''Dual temp scheduling'''
-        pos_temp, neg_temp = get_temp_positive(tmin, tmax, positive_samples.detach()), get_temp_negative(tmin, tmax, negative_samples.detach())
-        positive_samples = positive_samples / pos_temp
-        negative_samples = negative_samples / neg_temp
+        # # '''Dual temp scheduling'''
+        # pos_temp, neg_temp = get_temp_positive(tmin, tmax, positive_samples.detach()), get_temp_negative(tmin, tmax, negative_samples.detach())
+        # positive_samples = positive_samples / pos_temp
+        # negative_samples = negative_samples / neg_temp
         
-        logits = torch.cat((positive_samples, negative_samples), dim=1)
+        # logits = torch.cat((positive_samples, negative_samples), dim=1)
         
-        labels = torch.zeros(logits.shape[0], dtype=torch.long).cuda()
-        loss = F.cross_entropy(logits, labels)
+        # labels = torch.zeros(logits.shape[0], dtype=torch.long).cuda()
+        # loss = F.cross_entropy(logits, labels)
+        loss = MACL(positive_samples,negative_samples ,t_0,0.5,0)
 
         train_optimizer.zero_grad()
         loss.backward()
@@ -156,8 +177,8 @@ def test(net, memory_data_loader, test_data_loader, temperature):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train SimCLR with Dual Temp Scheduling')
     parser.add_argument('--feature_dim', default=128, type=int, help='Feature dim for latent vector')
-    parser.add_argument('--tmin', default=0.07, type=float, help='Min. Temperature used in temp scheduling')
-    parser.add_argument('--tmax', default=0.2, type=float, help='Max. Temperature used in temp scheduling')
+    parser.add_argument('--t_0', default=0.07, type=float, help='Temperature used in temp scheduling')
+    # parser.add_argument('--tmax', default=0.2, type=float, help='Max. Temperature used in temp scheduling')
     parser.add_argument('--func', default='expo', type=str, choices=['cossin', 'const', 'cosconst'], help='temperature function to be used')
     parser.add_argument('--exp_params', default='0.2|0.1|3.5', type=str, help='parameters of exponential scheduling')
     parser.add_argument('--knn_t', default=0.1, type=float, help='Temperature value for KNN eval')
@@ -175,7 +196,7 @@ if __name__ == '__main__':
 
     # args parse
     args = parser.parse_args()
-    feature_dim, tmin, tmax, k = args.feature_dim, args.tmin, args.tmax, args.k
+    feature_dim,k = args.feature_dim,args.k
     func, knn_t, batch_size, epochs = args.func, args.knn_t, args.batch_size, args.epochs
     exp_params, opti, lr = args.exp_params, args.opti, args.lr
     global_step = 0
@@ -187,7 +208,7 @@ if __name__ == '__main__':
         train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True, drop_last=True)
         memory_data = CIFAR10LT(root=args.datapath, train=True, imb_factor=args.ratio, transform=utils.test_transform)
         memory_loader = DataLoader(memory_data, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
-        test_data = utils.CIFAR10Pair(root=args.datapath, train=False, transform=utils.test_transform, download=False)
+        test_data = utils.CIFAR10Pair(root=args.datapath, train=False, transform=utils.test_transform, download=True)
         test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
         
     elif args.dataset == 'cifar10' and args.lt == False:
@@ -227,7 +248,7 @@ if __name__ == '__main__':
         test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
     # model setup and optimizer config
-    model = Model2(feature_dim).cuda()
+    model = Model(feature_dim).cuda()
     flops, params = profile(model, inputs=(torch.randn(1, 3, 32, 32).cuda(),))
     flops, params = clever_format([flops, params])
     print('# Model Params: {} FLOPs: {}'.format(params, flops))
@@ -241,7 +262,7 @@ if __name__ == '__main__':
     # training loop
     data_type = 'BAL' if not args.lt else 'LT'
     results = {'learning_rate': [], 'train_loss': [], 'test_acc@1': [], 'test_acc@5': []}
-    save_name_pre = '{}-{}-{}-{}-{}-{}-{}-{}NN-{}-{}'.format(args.dataset,data_type, opti, lr, func, tmin, tmax, k, batch_size, epochs).replace('.','p')
+    save_name_pre = '{}-{}-{}-{}-{}-{}-{}NN-{}-{}'.format(args.dataset,data_type, opti, lr, func, args.t_0, k, batch_size, epochs).replace('.','p')
 
     today_datetime = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S").replace('/','').replace(' ','').replace(':','')
     
@@ -251,7 +272,7 @@ if __name__ == '__main__':
     precomp_mask = get_mask_negative(batch_size)
     for epoch in range(1, epochs + 1):
         curr_lr = optimizer.state_dict()['param_groups'][0]['lr']
-        train_loss = train(model, train_loader, optimizer, batch_size, tmin, tmax)
+        train_loss = train(model, train_loader, optimizer, batch_size, args.t_0)
         if opti == 'SGD':
             scheduler.step() # for SGD
         results['learning_rate'].append(curr_lr)
