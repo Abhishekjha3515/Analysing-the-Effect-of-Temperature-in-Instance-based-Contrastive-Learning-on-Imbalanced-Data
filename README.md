@@ -38,11 +38,14 @@ The dataset paths and related configurations need to be updated according to you
 For questions or issues related to this code, please contact me at:
 
 Abhishek Kumar
+
 Email: Abhishekjha3515@gmail.com
 
-# collaborator :
+# Collaborator :
 Siladittya Manna
+
 Email:  mannasiladittya@gmail.com
 
 Prof  Saumik Bhattacharya
 
+IIT  Kharagpur
